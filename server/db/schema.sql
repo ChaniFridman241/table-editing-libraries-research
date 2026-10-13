@@ -40,3 +40,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_employee ON audit_log(employee_id);
 
 -- הגדרות תצוגת עמודות (סדר ורוחב) לכל משתמשת
 ALTER TABLE users ADD COLUMN IF NOT EXISTS grid_settings JSONB;
+
+-- הרשאות (RBAC): תפקיד לכל משתמשת. admin | finance | editor | viewer
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'viewer';
+
+-- מי הוסיפה את העובד (לבדיקת הרשאה לפי בעלות)
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id);

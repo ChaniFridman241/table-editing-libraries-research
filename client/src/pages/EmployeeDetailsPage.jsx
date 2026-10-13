@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api.js';
-import { DEPARTMENTS, formatDateTime } from '../columns.jsx';
+import { subject } from '@casl/ability';
+import { useAbility } from '@casl/react';
+import { DEPARTMENTS, canEditField, formatDateTime } from '../columns.jsx';
 import { AuditTable } from './HistoryPage.jsx';
 
 const FIELDS = [
@@ -37,9 +39,20 @@ export default function EmployeeDetailsPage() {
     qc.invalidateQueries({ queryKey: ['audit'] });
   };
 
+  // הרשאות (CASL): אילו שדות מוצגים ואילו אפשר לערוך
+  const ability = useAbility();
+  const visibleFields = FIELDS.filter((f) => ability.can('read', 'Employee', f.name));
+  const canEdit = (name) => !!form && canEditField(ability, form, name);
+
   const save = useMutation({
     mutationFn: () => {
-      const changes = Object.fromEntries(FIELDS.map((f) => [f.name, form[f.name]]));
+      // נשלחים רק שדות שהשתנו ושמותר לערוך
+      const changes = Object.fromEntries(
+        visibleFields
+          .filter((f) => canEdit(f.name) && String(form[f.name] ?? '') !== String(employee.data[f.name] ?? ''))
+          .map((f) => [f.name, form[f.name]])
+      );
+      if (!Object.keys(changes).length) throw new Error('אין שינויים לשמירה');
       return api.updateEmployee(Number(id), form.version, changes);
     },
     onSuccess: (row) => {
@@ -69,6 +82,8 @@ export default function EmployeeDetailsPage() {
 
   const deleted = !!employee.data.deleted_at;
   const set = (name, value) => setForm((f) => ({ ...f, [name]: value }));
+  const canSave = visibleFields.some((f) => canEdit(f.name));
+  const canDelete = ability.can('delete', subject('Employee', { ...employee.data }));
 
   return (
     <div className="page">
@@ -82,11 +97,11 @@ export default function EmployeeDetailsPage() {
         className="details-form"
         onSubmit={(e) => { e.preventDefault(); save.mutate(); }}
       >
-        {FIELDS.map((f) => (
+        {visibleFields.map((f) => (
           <label key={f.name}>
             {f.label}
             {f.options ? (
-              <select value={form[f.name] ?? ''} onChange={(e) => set(f.name, e.target.value)} disabled={deleted}>
+              <select value={form[f.name] ?? ''} onChange={(e) => set(f.name, e.target.value)} disabled={deleted || !canEdit(f.name)}>
                 <option value="" />
                 {f.options.map((o) => <option key={o}>{o}</option>)}
               </select>
@@ -94,7 +109,7 @@ export default function EmployeeDetailsPage() {
               <input
                 type={f.type ?? 'text'}
                 value={form[f.name] ?? ''}
-                disabled={deleted}
+                disabled={deleted || !canEdit(f.name)}
                 onChange={(e) => set(f.name, f.type === 'number' ? Number(e.target.value) : e.target.value)}
               />
             )}
@@ -102,18 +117,25 @@ export default function EmployeeDetailsPage() {
         ))}
 
         <div className="form-actions">
-          <button className="primary" disabled={deleted || save.isPending}>
-            {save.isPending ? 'שומר...' : 'שמירה'}
-          </button>
-          <button type="button" onClick={() => setForm(employee.data)} disabled={deleted}>ביטול שינויים</button>
-          <button
-            type="button"
-            className="danger"
-            disabled={deleted || remove.isPending}
-            onClick={() => window.confirm('למחוק את העובד?') && remove.mutate()}
-          >
-            מחיקה
-          </button>
+          {canSave && (
+            <>
+              <button className="primary" disabled={deleted || save.isPending}>
+                {save.isPending ? 'שומר...' : 'שמירה'}
+              </button>
+              <button type="button" onClick={() => setForm(employee.data)} disabled={deleted}>ביטול שינויים</button>
+            </>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              className="danger"
+              disabled={deleted || remove.isPending}
+              onClick={() => window.confirm('למחוק את העובד?') && remove.mutate()}
+            >
+              מחיקה
+            </button>
+          )}
+          {!canSave && <span className="muted">אין לך הרשאה לערוך עובדים</span>}
         </div>
         <p className="muted">
           עודכן לאחרונה {formatDateTime(employee.data.updated_at)}

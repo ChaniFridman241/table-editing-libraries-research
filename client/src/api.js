@@ -48,6 +48,9 @@ export const api = {
   deleteEmployee: (id, version) => request('DELETE', `/employees/${id}?version=${version}`),
   restoreEmployee: (id, version) => request('POST', `/employees/${id}/restore`, { version }),
 
+  listUsers: () => request('GET', '/users'),
+  setUserRole: (id, role) => request('PATCH', `/users/${id}/role`, { role }),
+
   getGridSettings: () => request('GET', '/settings/grid'),
   saveGridSettings: (columns) => request('PUT', '/settings/grid', { columns }),
 

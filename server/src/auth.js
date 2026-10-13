@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { pool } from './db.js';
+import { defineAbilityFor } from './abilities.js';
 
 const SECRET = process.env.JWT_SECRET || 'dev-secret';
 
@@ -52,16 +53,28 @@ authRouter.post('/register', async (req, res, next) => {
   }
 });
 
-// middleware: כל בקשה ל-API חייבת טוקן תקף
-export function requireAuth(req, res, next) {
+// middleware: כל בקשה ל-API חייבת טוקן תקף.
+// התפקיד נקרא מה-DB בכל בקשה, כך ששינוי תפקיד נכנס לתוקף מיד.
+export async function requireAuth(req, res, next) {
   const header = req.headers.authorization ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  let payload;
   try {
-    req.user = jwt.verify(token, SECRET);
-    next();
+    payload = jwt.verify(token, SECRET);
   } catch {
-    res.status(401).json({ error: 'נדרשת התחברות' });
+    return res.status(401).json({ error: 'נדרשת התחברות' });
+  }
+  try {
+    const { rows } = await pool.query('SELECT id, username, display_name, role FROM users WHERE id = $1', [payload.id]);
+    if (!rows[0]) return res.status(401).json({ error: 'נדרשת התחברות' });
+    const u = rows[0];
+    req.user = { id: u.id, username: u.username, displayName: u.display_name, role: u.role };
+    req.ability = defineAbilityFor(req.user);
+    next();
+  } catch (err) {
+    next(err);
   }
 }
 
-authRouter.get('/me', requireAuth, (req, res) => res.json({ user: req.user }));
+// המשתמשת המחוברת + כללי ההרשאה שלה (האתר בונה מהם את אותן הרשאות עם CASL)
+authRouter.get('/me', requireAuth, (req, res) => res.json({ user: req.user, rules: req.ability.rules }));

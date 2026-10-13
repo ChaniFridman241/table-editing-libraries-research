@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api.js';
-import { columnDefs, defaultColDef } from '../columns.jsx';
+import { subject } from '@casl/ability';
+import { Can, useAbility } from '@casl/react';
+import { buildColumnDefs, buildDefaultColDef } from '../columns.jsx';
 import { useUndoStack } from '../useUndoStack.js';
 import Toast from '../components/Toast.jsx';
 
@@ -26,6 +28,11 @@ export default function EmployeesPage() {
   const [undoing, setUndoing] = useState(false);
   const [toast, setToast] = useState(null);
   const undo = useUndoStack();
+
+  // הרשאות (CASL): קובעות אילו עמודות מוצגות ואילו תאים אפשר לערוך
+  const ability = useAbility();
+  const columnDefs = useMemo(() => buildColumnDefs(ability), [ability]);
+  const defaultColDef = useMemo(() => buildDefaultColDef(ability), [ability]);
 
   // הגרסה האחרונה שידועה לנו לכל שורה - נשלחת לשרת לזיהוי התנגשויות
   const versions = useRef(new Map());
@@ -175,7 +182,12 @@ export default function EmployeesPage() {
     // שורות חדשות שעוד לא נשמרו - פשוט מורידים מהמסך
     const unsaved = all.filter((r) => r.id < 0 && !pendingCreates.current.has(r.id)).map((r) => r.id);
     if (unsaved.length) setNewRows((list) => list.filter((r) => !unsaved.includes(r.id)));
-    const selected = all.filter((r) => r.id > 0);
+    const saved = all.filter((r) => r.id > 0);
+    // הרשאה לפי בעלות (CASL): עורכת יכולה למחוק רק עובדים שהיא הוסיפה
+    const selected = saved.filter((r) => ability.can('delete', subject('Employee', { ...r })));
+    if (selected.length < saved.length) {
+      showToast('error', `אין לך הרשאה למחוק ${saved.length - selected.length} מהעובדים שסימנת`);
+    }
     if (!selected.length) return;
     if (!window.confirm(`למחוק ${selected.length} עובדים?`)) return;
 
@@ -244,7 +256,8 @@ export default function EmployeesPage() {
   // נקרא כשמסיימים לגרור או למתוח עמודה. המיון לא נשמר כאן - הוא נשמר בנפרד בשרת.
   const saveColumnLayout = () => {
     const columns = gridRef.current.api.getColumnState()
-      .map(({ colId, width, flex, hide, pinned }) => ({ colId, width, flex, hide, pinned }));
+      // הסתרת עמודות נקבעת לפי ההרשאות, לכן היא לא נשמרת כאן
+      .map(({ colId, width, flex, pinned }) => ({ colId, width, flex, pinned }));
     saveColumns.mutate(columns);
   };
 
@@ -299,8 +312,12 @@ export default function EmployeesPage() {
       </p>
 
       <div className="toolbar">
-        <button onClick={addRow}>＋ הוספת שורה</button>
-        <button onClick={deleteSelected}>🗑 מחיקת מסומנות</button>
+        <Can I="create" a="Employee">
+          <button onClick={addRow}>＋ הוספת שורה</button>
+        </Can>
+        <Can I="delete" a="Employee">
+          <button onClick={deleteSelected}>🗑 מחיקת מסומנות</button>
+        </Can>
         <button onClick={runUndo} disabled={!undo.size || undoing} title={undo.last?.label ?? ''}>
           ↶ ביטול פעולה אחרונה
         </button>

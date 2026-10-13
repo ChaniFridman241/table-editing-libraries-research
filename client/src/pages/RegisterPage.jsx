@@ -51,6 +51,7 @@ export default function RegisterPage() {
         </label>
         {error && <div className="error-box">{error}</div>}
         <button className="primary" disabled={busy}>{busy ? 'נרשמת...' : 'הרשמה'}</button>
+        <p className="hint">משתמשת חדשה מקבלת הרשאת צפייה. מנהלת יכולה לשנות את ההרשאה.</p>
         <p className="hint">כבר יש לך משתמשת? <Link to="/login">לכניסה</Link></p>
       </form>
     </div>

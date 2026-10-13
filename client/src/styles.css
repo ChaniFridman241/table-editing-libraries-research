@@ -57,6 +57,12 @@ input, select {
 .toolbar .search { min-width: 220px; }
 .toolbar .status { color: #6b7280; font-size: .85rem; margin-inline-start: auto; }
 
+.cell-locked { color: #6b7280; background: #f8fafc; }
+.role-badge {
+  margin-inline-start: 6px; padding: 1px 8px; border-radius: 10px;
+  background: #334155; color: #e2e8f0; font-size: .8rem;
+}
+
 .pager { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 14px 0; }
 
 .error-box, .success-box {

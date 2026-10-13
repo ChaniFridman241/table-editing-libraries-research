@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool, withTransaction } from './db.js';
+import { ROLES, visibleEmployee } from './abilities.js';
 import {
   ApiError,
   EDITABLE_FIELDS,
@@ -15,14 +16,22 @@ export const apiRouter = Router();
 // Express 4 לא תופס שגיאות של פונקציות async, אז עוטפים
 const h = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+// בדיקת הרשאה (CASL) לפני הפעולה
+const requireCan = (action, subjectType) => (req, res, next) =>
+  req.ability.can(action, subjectType) ? next() : next(new ApiError(403, 'אין לך הרשאה לפעולה הזו'));
+
+const actorOf = (req) => ({ id: req.user.id, ability: req.ability });
+
 const SORTABLE = new Set(['id', 'updated_at', ...EDITABLE_FIELDS]);
 
 // רשימת עובדים עם דפדוף, חיפוש ומיון בצד השרת
-apiRouter.get('/employees', h(async (req, res) => {
+apiRouter.get('/employees', requireCan('read', 'Employee'), h(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 10));
   const search = String(req.query.search ?? '').trim();
-  const sortField = SORTABLE.has(req.query.sortField) ? req.query.sortField : 'id';
+  let sortField = SORTABLE.has(req.query.sortField) ? req.query.sortField : 'id';
+  // אי אפשר למיין לפי שדה שאסור לראות
+  if (!req.ability.can('read', 'Employee', sortField)) sortField = 'id';
   const sortDir = req.query.sortDir === 'desc' ? 'DESC' : 'ASC';
 
   const params = [];
@@ -39,34 +48,34 @@ apiRouter.get('/employees', h(async (req, res) => {
      LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
     params
   );
-  res.json({ rows, total, page, pageSize });
+  res.json({ rows: rows.map((r) => visibleEmployee(req.ability, r)), total, page, pageSize });
 }));
 
-apiRouter.get('/employees/:id', h(async (req, res) => {
+apiRouter.get('/employees/:id', requireCan('read', 'Employee'), h(async (req, res) => {
   const { rows } = await pool.query(`${SELECT_EMPLOYEE} WHERE e.id = $1`, [req.params.id]);
   if (!rows[0]) throw new ApiError(404, 'העובד לא נמצא');
-  res.json(rows[0]);
+  res.json(visibleEmployee(req.ability, rows[0]));
 }));
 
 apiRouter.post('/employees', h(async (req, res) => {
-  const row = await withTransaction((c) => createEmployee(c, req.user.id, req.body));
+  const row = await withTransaction((c) => createEmployee(c, actorOf(req), req.body));
   res.status(201).json(row);
 }));
 
 apiRouter.patch('/employees/:id', h(async (req, res) => {
   const { version, changes } = req.body ?? {};
-  const row = await withTransaction((c) => updateEmployee(c, req.user.id, Number(req.params.id), version, changes));
+  const row = await withTransaction((c) => updateEmployee(c, actorOf(req), Number(req.params.id), version, changes));
   res.json(row);
 }));
 
 apiRouter.delete('/employees/:id', h(async (req, res) => {
-  const row = await withTransaction((c) => deleteEmployee(c, req.user.id, Number(req.params.id), req.query.version));
+  const row = await withTransaction((c) => deleteEmployee(c, actorOf(req), Number(req.params.id), req.query.version));
   res.json(row);
 }));
 
 // ביטול מחיקה
 apiRouter.post('/employees/:id/restore', h(async (req, res) => {
-  const row = await withTransaction((c) => restoreEmployee(c, req.user.id, Number(req.params.id), req.body?.version));
+  const row = await withTransaction((c) => restoreEmployee(c, actorOf(req), Number(req.params.id), req.body?.version));
   res.json(row);
 }));
 
@@ -83,7 +92,7 @@ apiRouter.put('/settings/grid', h(async (req, res) => {
 }));
 
 // יומן פעולות
-apiRouter.get('/audit', h(async (req, res) => {
+apiRouter.get('/audit', requireCan('read', 'AuditLog'), h(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = 20;
   const params = [];
@@ -102,5 +111,26 @@ apiRouter.get('/audit', h(async (req, res) => {
      ORDER BY a.id DESC LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
     params
   );
-  res.json({ rows, total, page, pageSize });
+  // שדות שאסור לראות (למשל שכר) לא מוצגים גם ביומן
+  const hide = (obj) => obj && Object.fromEntries(Object.entries(obj).filter(([k]) => req.ability.can('read', 'Employee', k)));
+  res.json({ rows: rows.map((a) => ({ ...a, before: hide(a.before), after: hide(a.after) })), total, page, pageSize });
+}));
+
+// ---------- ניהול משתמשות (רק מנהלת) ----------
+apiRouter.get('/users', requireCan('read', 'User'), h(async (req, res) => {
+  const { rows } = await pool.query('SELECT id, username, display_name, role FROM users ORDER BY id');
+  res.json(rows);
+}));
+
+apiRouter.patch('/users/:id/role', requireCan('update', 'User'), h(async (req, res) => {
+  const id = Number(req.params.id);
+  const role = req.body?.role;
+  if (!ROLES.includes(role)) throw new ApiError(400, 'תפקיד לא מוכר');
+  if (id === req.user.id) throw new ApiError(400, 'אי אפשר לשנות את התפקיד של עצמך');
+  const { rows } = await pool.query(
+    'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, username, display_name, role',
+    [role, id]
+  );
+  if (!rows[0]) throw new ApiError(404, 'המשתמשת לא נמצאה');
+  res.json(rows[0]);
 }));

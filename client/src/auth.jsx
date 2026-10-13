@@ -1,38 +1,64 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { createMongoAbility } from '@casl/ability';
+import { AbilityProvider } from '@casl/react';
 import { api, tokenStore } from './api.js';
 
 const AuthContext = createContext(null);
 
+export const ROLE_LABELS = { admin: 'מנהלת', finance: 'מנהלת כספים', editor: 'עורכת', viewer: 'צופה' };
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(!!tokenStore.get());
+  const qc = useQueryClient();
+  const [token, setToken] = useState(tokenStore.get());
+
+  // המשתמשת המחוברת וכללי ההרשאה שלה מהשרת. מתעדכן מדי פעם, כך ששינוי תפקיד נכנס לתוקף בלי להתנתק.
+  const me = useQuery({
+    queryKey: ['me', token],
+    queryFn: api.me,
+    enabled: !!token,
+    retry: false,
+    refetchInterval: 30_000,
+  });
 
   useEffect(() => {
-    if (!tokenStore.get()) return;
-    api.me()
-      .then(({ user }) => setUser(user))
-      .catch(() => tokenStore.clear())
-      .finally(() => setLoading(false));
-  }, []);
+    if (me.isError) {
+      tokenStore.clear();
+      setToken(null);
+    }
+  }, [me.isError]);
 
-  const login = async (username, password) => {
-    const { token, user } = await api.login(username, password);
-    tokenStore.set(token);
-    setUser(user);
+  // CASL: בונה באתר את אותן הרשאות שהשרת אוכף
+  const ability = useMemo(() => createMongoAbility(me.data?.rules ?? []), [me.data]);
+
+  const signIn = (t) => {
+    tokenStore.set(t);
+    setToken(t);
   };
 
-  const register = async (username, password, displayName) => {
-    const { token, user } = await api.register(username, password, displayName);
-    tokenStore.set(token);
-    setUser(user);
-  };
+  const login = async (username, password) => signIn((await api.login(username, password)).token);
+  const register = async (username, password, displayName) =>
+    signIn((await api.register(username, password, displayName)).token);
 
   const logout = () => {
     tokenStore.clear();
-    setUser(null);
+    setToken(null);
+    qc.clear();
   };
 
-  return <AuthContext.Provider value={{ user, loading, login, register, logout }}>{children}</AuthContext.Provider>;
+  const value = {
+    user: me.data?.user ?? null,
+    loading: !!token && me.isLoading,
+    login,
+    register,
+    logout,
+  };
+
+  return (
+    <AuthContext.Provider value={value}>
+      <AbilityProvider value={ability}>{children}</AbilityProvider>
+    </AuthContext.Provider>
+  );
 }
 
 export const useAuth = () => useContext(AuthContext);

@@ -8,10 +8,11 @@ import { pool } from '../src/db.js';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const schema = fs.readFileSync(path.join(dir, '../db/schema.sql'), 'utf8');
 
+// משתמשות דמו, אחת לכל תפקיד (משתמשת שנרשמת לבד מקבלת "צופה")
 const users = [
-  { username: 'chani', display_name: 'חני' },
-  { username: 'chaya', display_name: 'חיה' },
-  { username: 'sara', display_name: 'שרה' },
+  { username: 'chani', display_name: 'חני', role: 'admin' },
+  { username: 'chaya', display_name: 'חיה', role: 'finance' },
+  { username: 'sara', display_name: 'שרה', role: 'editor' },
 ];
 
 const firstNames = ['דוד', 'רחל', 'משה', 'לאה', 'יוסף', 'מרים', 'אברהם', 'אסתר', 'יעקב', 'רבקה', 'שמואל', 'דבורה', 'אליהו', 'נועה', 'דניאל'];
@@ -28,12 +29,14 @@ async function main() {
   const hash = await bcrypt.hash('1234', 10);
   for (const u of users) {
     await pool.query(
-      `INSERT INTO users (username, password_hash, display_name)
-       VALUES ($1, $2, $3) ON CONFLICT (username) DO NOTHING`,
-      [u.username, hash, u.display_name]
+      `INSERT INTO users (username, password_hash, display_name, role)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (username) DO NOTHING`,
+      [u.username, hash, u.display_name, u.role]
     );
+    // משתמשות דמו שנוצרו לפני שהיו תפקידים - מקבלות את התפקיד שלהן
+    await pool.query(`UPDATE users SET role = $1 WHERE username = $2 AND role = 'viewer'`, [u.role, u.username]);
   }
-  console.log('✔ משתמשות: chani / chaya / sara  (סיסמה 1234)');
+  console.log('✔ משתמשות: chani (מנהלת) / chaya (מנהלת כספים) / sara (עורכת)  - סיסמה 1234');
 
   const { rows } = await pool.query('SELECT count(*)::int AS n FROM employees');
   if (rows[0].n === 0) {
